@@ -1,0 +1,20 @@
+# Ignore video files
+*.mp4
+*.webm
+*.mkv
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# Ignore virtual environments
+venv/
+.env/
+
+# Ignore OS files
+.DS_Store
+
+# Ignore Jupyter checkpoints if using notebooks
+.ipynb_checkpoints/
+.video
+.gradio/
