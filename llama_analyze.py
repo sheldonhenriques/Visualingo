@@ -1,9 +1,7 @@
 import os
 import json
-import concurrent.futures
 from openai import OpenAI
 from dotenv import load_dotenv
-from pose import generate_mp4
 from video import get_transcript
 
 load_dotenv()
@@ -63,116 +61,69 @@ def summarize_segments(video_path):
         )
 
         output = json.loads(response.choices[0].message.content)
-        all_segments = output["segments"]
-
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(process_segment_for_video, segment) for segment in all_segments]
-            enhanced_segments = [f.result() for f in concurrent.futures.as_completed(futures)]
-
-        enhanced_segments = sorted(enhanced_segments, key=lambda s: s["start_time"])
-        video_paths = [seg["video_path"] for seg in enhanced_segments]
-        return enhanced_segments, video_paths
+        return output["segments"], None, None
 
     except Exception as e:
         print(f"Error from LLAMA: {e}")
         raise
 
-def process_segment_for_video(segment):
-    glossy_text = segment["glossy_text"]
-    words = glossy_text.split()
-
-    # Limit overly long glosses
-    if len(words) > 25:
-        glossy_text = " ".join(words[:25]) + "..."
-
-    duration = segment["end_time"] - segment["start_time"]
-
-    try:
-        video_path = generate_mp4(glossy_text, duration=duration)
-    except Exception as e:
-        print(f"[Pose API error] {e} for text: {glossy_text}")
-        video_path = ""  # Optional fallback
-
-    return {
-        "start_time": segment["start_time"],
-        "end_time": segment["end_time"],
-        "original_text": segment["original_text"],
-        "glossy_text": glossy_text,
-        "emotion": segment["emotion"],
-        "video_path": video_path
-    }
-
 def summarize_segments_with_html(video_path):
-    segments, video_paths = summarize_segments(video_path)
+    segments, _, _ = summarize_segments(video_path)
 
-    # Sort the transcript for chronological display
     transcript_text = "\n".join([
         f"[{s['start_time']:.2f}-{s['end_time']:.2f}] {s['original_text']} ({s['emotion']})"
         for s in sorted(segments, key=lambda s: s["start_time"])
     ])
 
-    html = generate_asl_display_html(segments)
-    return transcript_text, video_paths, html
+    stitched_asl_path = os.path.join("stitched_output.mp4")
+    if not os.path.exists(stitched_asl_path):
+        raise FileNotFoundError(f"{stitched_asl_path} not found. Make sure ASL video is generated.")
 
-def generate_asl_display_html(segments):
-    segments = sorted(segments, key=lambda s: s["start_time"])
+    html = generate_asl_sync_html("/file=stitched_output.mp4")
+    return transcript_text, [stitched_asl_path], html
 
-    for seg in sorted(segments, key=lambda s: s["start_time"]):
-        if not seg["video_path"].startswith("/file="):
-            seg["video_path"] = f"/file={os.path.basename(seg['video_path'])}"
-
-    segments_json = json.dumps(segments)
-
+def generate_asl_sync_html(asl_video_url):
     html = f"""
     <div id="asl-container" style="text-align:center;">
-        <video id="asl-video" width="256" height="256" muted playsinline style="display:none;">
-            <source id="asl-video-src" src="" type="video/mp4">
+        <video id="asl-video" width="256" height="256" muted playsinline style="display:block;">
+            <source src="{asl_video_url}" type="video/mp4">
         </video>
-        <div id="asl-text" style="margin-top: 5px; font-size: 16px; font-weight: bold;"></div>
-        <div id="asl-emotion" style="margin-top: 3px; font-style: italic;"></div>
+        <div style="margin-top: 5px; font-size: 12px; color: #666;">ASL Animation</div>
     </div>
     <script>
-    const segments = {segments_json};
-    const videoEl = document.getElementById("asl-video");
-    const srcEl = document.getElementById("asl-video-src");
-    const textDiv = document.getElementById("asl-text");
-    const emotionDiv = document.getElementById("asl-emotion");
+    (function() {{
+        const aslVideo = document.getElementById("asl-video");
+        if (!aslVideo) return;
 
-    function findMainVideo() {{
-        return document.querySelector("video:not(#asl-video)");
-    }}
-
-    function sync() {{
-        const main = findMainVideo();
-        if (!main) {{
-            setTimeout(sync, 1000);
-            return;
+        function findMainVideo() {{
+            const mainContainer = document.getElementById("main-video");
+            return mainContainer ? mainContainer.querySelector("video") : null;
         }}
 
-        main.addEventListener("timeupdate", () => {{
-            const t = main.currentTime;
-            const seg = segments.find(s => t >= s.start_time && t <= s.end_time);
-
-            if (seg && videoEl.dataset.segment !== String(seg.start_time)) {{
-                srcEl.src = seg.video_path;
-                videoEl.load();
-                videoEl.dataset.segment = seg.start_time;
-                videoEl.currentTime = 0;
-                videoEl.play();
-                videoEl.style.display = "block";
-                textDiv.textContent = seg.glossy_text;
-                emotionDiv.textContent = "Emotion: " + seg.emotion;
-            }} else if (!seg) {{
-                videoEl.style.display = "none";
-                videoEl.pause();
-                textDiv.textContent = "";
-                emotionDiv.textContent = "";
-                videoEl.dataset.segment = "";
+        function setupSync() {{
+            const mainVideo = findMainVideo();
+            if (!mainVideo) {{
+                setTimeout(setupSync, 500);
+                return;
             }}
-        }});
-    }}
 
-    sync();
+            mainVideo.addEventListener("play", () => {{
+                aslVideo.play().catch(e => console.warn("ASL autoplay blocked", e));
+            }});
+            mainVideo.addEventListener("pause", () => aslVideo.pause());
+            mainVideo.addEventListener("seeking", () => {{
+                aslVideo.currentTime = mainVideo.currentTime;
+            }});
+            mainVideo.addEventListener("timeupdate", () => {{
+                if (Math.abs(aslVideo.currentTime - mainVideo.currentTime) > 0.1) {{
+                    aslVideo.currentTime = mainVideo.currentTime;
+                }}
+            }});
+            mainVideo.addEventListener("ended", () => aslVideo.pause());
+        }}
+
+        setupSync();
+    }})();
     </script>
     """
     return html

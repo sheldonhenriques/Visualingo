@@ -10,7 +10,6 @@ def process_uploaded_video(uploaded_video):
     return process_video(uploaded_video=uploaded_video)
 
 def process_video(youtube_url=None, uploaded_video=None):
-    """Process either a YouTube URL or uploaded video"""
     if youtube_url:
         video_path = download_youtube_video(youtube_url)
     elif uploaded_video:
@@ -52,8 +51,9 @@ with gr.Blocks(css="""
     
     with gr.Row():
         with gr.Column(scale=2):
-            video_output = gr.Video(label="Video")
+            video_output = gr.Video(label="Video", elem_id="main-video")
             asl_display = gr.HTML(label="ASL Animation", elem_id="asl-display-area")
+            play_both_btn = gr.Button("▶️ Play Both Videos", elem_id="play-both-btn")
         
         with gr.Column(scale=1):
             transcript_output = gr.Textbox(label="Transcript", lines=10)
@@ -61,7 +61,6 @@ with gr.Blocks(css="""
     
     error_output = gr.Textbox(label="Status", visible=False)
     
-    # Set up event handlers
     youtube_process_btn.click(
         fn=process_youtube_video,
         inputs=[youtube_url_input],
@@ -74,7 +73,6 @@ with gr.Blocks(css="""
         outputs=[video_output, transcript_output, asl_gallery, asl_display]
     )
 
-
     gr.Markdown("""
     ## How it works
     1. Provide a YouTube URL or upload your own video
@@ -85,11 +83,65 @@ with gr.Blocks(css="""
     The system uses AI to enhance the transcription and determine appropriate emotional context.
     """)
 
-# Launch the app
+    gr.HTML("""
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        setupPlayButton();
+    });
+
+    function setupPlayButton() {
+        const observer = new MutationObserver(() => bindPlayButton());
+        observer.observe(document.body, { childList: true, subtree: true });
+        bindPlayButton();
+    }
+
+    function bindPlayButton() {
+        const playBtn = document.getElementById("play-both-btn");
+        if (!playBtn) return;
+
+        const newPlayBtn = playBtn.cloneNode(true);
+        playBtn.parentNode.replaceChild(newPlayBtn, playBtn);
+
+        newPlayBtn.addEventListener("click", async () => {
+            const mainVideo = document.querySelector("#main-video video");
+            const aslVideo = document.getElementById("asl-video");
+
+            if (!mainVideo || !aslVideo) {
+                console.warn("One or both videos not found.");
+                return;
+            }
+
+            await Promise.all([
+                waitForVideoReady(mainVideo),
+                waitForVideoReady(aslVideo)
+            ]);
+
+            aslVideo.currentTime = mainVideo.currentTime;
+
+            try {
+                await Promise.all([mainVideo.play(), aslVideo.play()]);
+            } catch (e) {
+                console.warn("Playback error:", e);
+            }
+        });
+
+        console.log("Play button listener attached.");
+    }
+
+    function waitForVideoReady(video) {
+        return new Promise(resolve => {
+            if (video.readyState >= 2) {
+                resolve();
+            } else {
+                video.addEventListener("loadeddata", () => resolve(), { once: true });
+            }
+        });
+    }
+    </script>
+    """)
+
 if __name__ == "__main__":
-    # Ensure the allowed paths exist
     temp_dir = os.path.join(os.getcwd(), "temp")
     if not os.path.exists(temp_dir):
         os.makedirs(temp_dir)
-        
     demo.launch(share=True, allowed_paths=[temp_dir])
