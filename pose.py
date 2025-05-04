@@ -43,12 +43,13 @@ def generate_gif(text, video_path):
         safe_text = re.sub(r'[^\w\-_\. ]', '_', text)[:50]  # limit length
 
         # Create gif directory if not exists
-        gif_dir = os.path.splitext(video_path)[0] + "_gifs"
+        gif_dir = os.path.join(os.getcwd(), "gifs")
         os.makedirs(gif_dir, exist_ok=True)
 
         gif_path = os.path.join(gif_dir, f"{safe_text}.gif")
-        print(gif_path)
         frames_to_gif(gif_frames, gif_path, fps=12)
+
+        return gif_path
 
     except Exception as e:
         print(f"Can't generate gif: {e}")
