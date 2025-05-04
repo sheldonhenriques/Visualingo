@@ -101,18 +101,21 @@ def summarize_segments(video_path):
 
         # Run GIF generation in parallel
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(process_segment_for_gif, segment, video_path) for segment in all_segments]
+            futures = [executor.submit(process_segment_for_gif, segment) for segment in all_segments]
             enhanced_segments = [future.result() for future in concurrent.futures.as_completed(futures)]
 
-        return enhanced_segments
+        gif_paths = [segment["gif_path"] for segment in enhanced_segments]
+
+        return enhanced_segments, gif_paths
 
     except Exception as e:
         print(f"Can't get llama: {e}")
 
 
-def process_segment_for_gif(segment, video_path):
+def process_segment_for_gif(segment):
     glossy_text = segment["glossy_text"]
-    gif_path = generate_gif(glossy_text, video_path)
+    gif_path = generate_gif(glossy_text)
+    gradio_url = f"/file={os.path.basename(gif_path)}"
     return {
         "start_time": segment["start_time"],
         "end_time": segment["end_time"],
@@ -121,3 +124,85 @@ def process_segment_for_gif(segment, video_path):
         "emotion": segment["emotion"],
         "gif_path": gif_path
     }
+
+
+def summarize_segments_with_html(video_path):
+    segments, gif_paths = summarize_segments(video_path)  # This returns a list of dicts with start_time, end_time, gif_path, etc.
+    transcript_text = "\n".join([s["glossy_text"] for s in segments])
+    html = generate_asl_display_html(segments)
+    return transcript_text, gif_paths, html
+
+
+def generate_asl_display_html(segments):
+    html = """
+    <div id="asl-container" style="text-align:center; margin-top:10px;">
+        <img id="asl-gif" src="" width="256" height="256" style="display:none;" />
+    </div>
+    <script>
+    const segments = """ + json.dumps(segments) + """;
+    const video = document.querySelector("video");
+    const gif = document.getElementById("asl-gif");
+
+    video.addEventListener("timeupdate", () => {
+        const time = video.currentTime;
+        const active = segments.find(s => time >= s.start_time && time <= s.end_time);
+        if (active) {
+            if (gif.src !== active.gif_path) {
+                gif.src = active.gif_path;
+                gif.style.display = "inline";
+            }
+        } else {
+            gif.style.display = "none";
+        }
+    });
+    </script>
+    """
+    return html
+
+# def generate_asl_display_html(segments):
+#     # Gradio needs full `/file=...` paths if returning temp files
+#     for seg in segments:
+#         if not seg["gif_path"].startswith("/file="):
+#             seg["gif_path"] = f"/file={os.path.basename(seg['gif_path'])}"
+
+#     html = f"""
+#     <div id="asl-container" style="text-align:center; margin-top:10px;">
+#         <img id="asl-gif" src="" width="256" height="256" style="display:none;" />
+#     </div>
+#     <script>
+#     const segments = {json.dumps(segments)};
+#     const gif = document.getElementById("asl-gif");
+
+#     function getVideoEl() {{
+#         return document.querySelector("video");
+#     }}
+
+#     function syncGifToVideo(video) {{
+#         video.addEventListener("timeupdate", () => {{
+#             const time = video.currentTime;
+#             const active = segments.find(s => time >= s.start_time && time <= s.end_time);
+#             if (active) {{
+#                 const gifURL = active.gif_path;
+#                 if (!gif.src.endsWith(gifURL)) {{
+#                     gif.src = gifURL;
+#                     gif.style.display = "inline";
+#                 }}
+#             }} else {{
+#                 gif.style.display = "none";
+#             }}
+#         }});
+#     }}
+
+#     // Wait until video exists before syncing
+#     const waitForVideo = setInterval(() => {{
+#         const video = getVideoEl();
+#         if (video) {{
+#             clearInterval(waitForVideo);
+#             syncGifToVideo(video);
+#         }}
+#     }}, 500);
+#     </script>
+#     """
+#     return html
+
+
