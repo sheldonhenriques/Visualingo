@@ -5,6 +5,10 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from pose import generate_mp4
 from video import get_transcript
+from pose import generate_gif
+from video import describe_video_by_frames, get_transcript
+from moviepy import VideoFileClip, concatenate_videoclips
+import concurrent.futures
 
 load_dotenv()
 
@@ -71,7 +75,17 @@ def summarize_segments(video_path):
 
         enhanced_segments = sorted(enhanced_segments, key=lambda s: s["start_time"])
         video_paths = [seg["video_path"] for seg in enhanced_segments]
-        return enhanced_segments, video_paths
+
+        # Load each GIF as a VideoFileClip
+        clips = [VideoFileClip(path) for path in video_paths]
+
+        # Concatenate them
+        final_clip = concatenate_videoclips(clips, method="compose")
+
+        # Export as a video or GIF
+        final_clip.write_videofile("stitched_output.mp4")
+
+        return enhanced_segments, final_clip
 
     except Exception as e:
         print(f"Error from LLAMA: {e}")
