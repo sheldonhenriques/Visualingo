@@ -5,6 +5,7 @@ from moviepy import VideoFileClip
 from groq import Groq
 from requests.exceptions import RequestException
 from dotenv import load_dotenv
+from llama_analyze import summarize_segments
 
 load_dotenv()
 
@@ -56,10 +57,11 @@ def get_transcript(video_path):
                 model="whisper-large-v3",
                 language="en",
                 response_format="verbose_json",
-                timestamp_granularities=["word"],
+                timestamp_granularities=["word","segment"],
                 temperature=0.0,
                 ) 
-            
+            print(transcription.segments)
+            summarize_segments(transcription.segments)
             print("Transcript secured")
             return json.dumps(transcription.words, indent=4)
             
