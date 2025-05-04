@@ -1,11 +1,14 @@
+import io
 import os
 import json
+import base64
 import yt_dlp
 from moviepy import VideoFileClip
+from PIL import Image
 from groq import Groq
 from requests.exceptions import RequestException
 from dotenv import load_dotenv
-from llama_analyze import summarize_segments
+import numpy as np
 
 load_dotenv()
 
@@ -59,11 +62,10 @@ def get_transcript(video_path):
                 response_format="verbose_json",
                 timestamp_granularities=["word","segment"],
                 temperature=0.0,
-                ) 
-            print(transcription.segments)
-            summarize_segments(transcription.segments)
+                )
+            
             print("Transcript secured")
-            return json.dumps(transcription.words, indent=4)
+            return transcription.segments #json.dumps(transcription, indent=4)
             
         
         except (RequestException, Exception) as e:
@@ -79,3 +81,36 @@ def get_transcript(video_path):
                 os.remove(audio_path)
             except Exception as e:
                 print(f"Failed to remove temporary audio file: {e}")
+
+def describe_video_by_frames(video_path, start, end, frame_interval=1.0):
+    try:
+        video = VideoFileClip(video_path)
+        frames = []
+
+        for t in np.arange(start, end, frame_interval):
+            frame = video.get_frame(t)
+            pil_image = Image.fromarray(frame)
+
+            byte_arr = io.BytesIO()
+            pil_image.save(byte_arr, format='JPEG')
+            pil_image.save("frame_sample.jpg")
+            image_bytes = byte_arr.getvalue()
+
+            image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+
+            frame_data = {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{image_b64}",
+                    "detail": "auto"
+                }
+            }
+
+            frames.append(frame_data)
+
+        video.close()
+        return frames
+
+    except Exception as e:
+        print(f"Error describing video: {e}")
+        return f"Unable to generate video description. Error: {str(e)}"

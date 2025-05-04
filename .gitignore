@@ -1,5 +1,6 @@
 # Ignore video files
 *.mp4
+*.mp3
 *.webm
 *.mkv
 
@@ -9,6 +10,7 @@ __pycache__/
 
 # Ignore virtual environments
 venv/
+myenv/
 .env
 
 # Ignore OS files
@@ -18,3 +20,4 @@ venv/
 .ipynb_checkpoints/
 .video
 .gradio/
+gifs

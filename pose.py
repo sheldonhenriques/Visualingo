@@ -1,8 +1,16 @@
+import uuid
 import requests
+import os
+import tempfile
+import torch
+import torchvision.transforms as T
 from pose_format import Pose
 from pose_format.pose_visualizer import PoseVisualizer
-from PIL import Image
 import numpy as np
+import ffmpeg
+
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Using device: {DEVICE}")
 
 def fetch_pose_from_api(text):
     url = "https://us-central1-sign-mt.cloudfunctions.net/spoken_text_to_signed_pose"
@@ -13,28 +21,58 @@ def fetch_pose_from_api(text):
     else:
         raise Exception(f"Failed to fetch pose data: Status code {response.status_code}, {response.text}")
 
-def resize_frames(frames, new_size=(256, 256)):
-    return [np.array(Image.fromarray(frame).resize(new_size, Image.Resampling.LANCZOS)) for frame in frames]
+def resize_frames_gpu(frames, new_size=(256, 256)):
+    tensor_frames = torch.stack([
+        torch.from_numpy(f).permute(2, 0, 1).float() for f in frames
+    ]).to(DEVICE)
 
-def frames_to_gif(frames, gif_path, fps=12):
-    pil_images = [Image.fromarray(frame.astype(np.uint8)).convert("P", palette=Image.ADAPTIVE) for frame in frames]
-    pil_images[0].save(
-        gif_path,
-        save_all=True,
-        append_images=pil_images[1:],
-        format='GIF',
-        loop=0,
-        duration=int(1000 / fps)
+    resize = T.Resize(new_size, antialias=True)
+    resized = torch.stack([resize(f.unsqueeze(0)).squeeze(0) for f in tensor_frames])
+    return [f.permute(1, 2, 0).cpu().numpy().astype(np.uint8) for f in resized]
+
+def resample_frames(frames, target_count):
+    if len(frames) == target_count:
+        return frames
+    indices = np.linspace(0, len(frames)-1, target_count).astype(int)
+    return [frames[i] for i in indices]
+
+class GPUPoseVisualizer:
+    def __init__(self, pose):
+        self.pose = pose
+        self.visualizer = PoseVisualizer(pose)
+
+    def draw(self):
+        frames = [f.astype(np.uint8) for f in self.visualizer.draw()]
+        return [frames[i] for i in range(len(frames)) if i % 3 != 2]
+
+def frames_to_mp4(frames, fps=12, output_path=None):
+    height, width, _ = frames[0].shape
+    output_path = output_path or os.path.join(tempfile.gettempdir(), f"{uuid.uuid4().hex}.mp4")
+
+    process = (
+        ffmpeg
+        .input('pipe:', format='rawvideo', pix_fmt='rgb24', s=f'{width}x{height}', framerate=fps)
+        .output(output_path, vcodec='libx264', pix_fmt='yuv420p', preset='ultrafast')
+        .overwrite_output()
+        .run_async(pipe_stdin=True)
     )
 
-def generate_gif(text):
+    for frame in frames:
+        process.stdin.write(frame.astype(np.uint8).tobytes())
+
+    process.stdin.close()
+    process.wait()
+    return output_path
+
+def generate_mp4(text, output_size=(256, 256), fps=12, duration=None):
     pose_data = fetch_pose_from_api(text)
     pose = Pose.read(pose_data)
-    v = PoseVisualizer(pose)
-    gif_frames = [frame.astype(np.uint8) for frame in v.draw()]
+    visualizer = GPUPoseVisualizer(pose)
+    frames = visualizer.draw()
+    resized_frames = resize_frames_gpu(frames, new_size=output_size)
 
-    gif_frames = [frame for i, frame in enumerate(gif_frames) if (i % 3) != 2]
-    gif_frames = resize_frames(gif_frames, new_size=(256, 256))
+    if duration is not None:
+        target_frame_count = max(1, int(duration * fps))
+        resized_frames = resample_frames(resized_frames, target_frame_count)
 
-    gif_path = "test.gif"
-    frames_to_gif(gif_frames, gif_path, fps=12)
+    return frames_to_mp4(resized_frames, fps=fps)
