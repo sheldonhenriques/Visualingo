@@ -127,82 +127,154 @@ def process_segment_for_gif(segment):
 
 
 def summarize_segments_with_html(video_path):
+    """
+    Process video segments and generate transcript, GIFs, and HTML for ASL display
+    
+    Args:
+        video_path: Path to the video file
+        
+    Returns:
+        tuple: (transcript_text, gif_paths, html_display)
+    """
     segments, gif_paths = summarize_segments(video_path)  # This returns a list of dicts with start_time, end_time, gif_path, etc.
-    transcript_text = "\n".join([s["glossy_text"] for s in segments])
+    
+    # Combine all glossy text segments for full transcript
+    transcript_text = "\n".join([f"[{s['start_time']:.2f}-{s['end_time']:.2f}] {s['glossy_text']} ({s['emotion']})" 
+                               for s in segments])
+    
+    # Generate HTML with our enhanced sync function
     html = generate_asl_display_html(segments)
+    
     return transcript_text, gif_paths, html
 
 
 def generate_asl_display_html(segments):
+    """
+    Generates HTML/JS code to display ASL GIFs synchronized with video playback
+    
+    Args:
+        segments: List of dictionaries containing start_time, end_time, and gif_path
+        
+    Returns:
+        HTML string with embedded JavaScript for synchronization
+    """
+    # Ensure GIF paths are properly formatted for Gradio
+    for seg in segments:
+        if not seg["gif_path"].startswith("/file="):
+            seg["gif_path"] = f"/file={os.path.basename(seg['gif_path'])}"
+
+    # Convert segments to JSON to embed in the HTML
+    segments_json = json.dumps(segments)
+    
     html = """
-    <div id="asl-container" style="text-align:center; margin-top:10px;">
-        <img id="asl-gif" src="" width="256" height="256" style="display:none;" />
+    <div id="asl-container" style="text-align:center; margin-top:10px; position:relative;">
+        <img id="asl-gif" src="" width="256" height="256" style="display:none; border: 3px solid #4CAF50;" />
+        <div id="asl-text" style="margin-top: 5px; font-size: 16px; font-weight: bold; color: #333;"></div>
+        <div id="asl-emotion" style="margin-top: 3px; font-style: italic; color: #666;"></div>
     </div>
     <script>
-    const segments = """ + json.dumps(segments) + """;
-    const video = document.querySelector("video");
-    const gif = document.getElementById("asl-gif");
-
-    video.addEventListener("timeupdate", () => {
-        const time = video.currentTime;
-        const active = segments.find(s => time >= s.start_time && time <= s.end_time);
-        if (active) {
-            if (gif.src !== active.gif_path) {
-                gif.src = active.gif_path;
-                gif.style.display = "inline";
+    // Store segments data
+    const segments = """ + segments_json + """;
+    let currentSegmentIndex = -1;
+    
+    // Function to find the video element
+    function findVideoElement() {
+        // Try to find the video element in various ways
+        let video = document.querySelector("video");
+        
+        // If not found, try looking inside iframes
+        if (!video) {
+            const iframes = document.querySelectorAll('iframe');
+            for (const iframe of iframes) {
+                try {
+                    video = iframe.contentDocument.querySelector('video');
+                    if (video) break;
+                } catch (e) {
+                    // Cross-origin iframe, can't access
+                    console.log("Could not access iframe content");
+                }
             }
-        } else {
-            gif.style.display = "none";
         }
-    });
+        
+        return video;
+    }
+    
+    // Set up the synchronization
+    function setupSync() {
+        const gif = document.getElementById("asl-gif");
+        const textDiv = document.getElementById("asl-text");
+        const emotionDiv = document.getElementById("asl-emotion");
+        const video = findVideoElement();
+        
+        if (!video) {
+            console.error("Video element not found, retrying in 1 second...");
+            setTimeout(setupSync, 1000);
+            return;
+        }
+        
+        console.log("Found video element, setting up synchronization");
+        
+        // Sync function that runs whenever video time updates
+        function syncGifToTime() {
+            const time = video.currentTime;
+            
+            // Find the active segment for current time
+            const activeSegment = segments.find(s => 
+                time >= s.start_time && time <= s.end_time
+            );
+            
+            if (activeSegment) {
+                // If we have an active segment, show the GIF
+                const gifURL = activeSegment.gif_path;
+                
+                // Only update if segment changed
+                if (gif.dataset.currentSegment !== String(activeSegment.start_time)) {
+                    gif.src = gifURL;
+                    gif.style.display = "inline-block";
+                    gif.dataset.currentSegment = String(activeSegment.start_time);
+                    
+                    // Update text displays
+                    textDiv.textContent = activeSegment.glossy_text;
+                    emotionDiv.textContent = "Emotion: " + activeSegment.emotion;
+                    
+                    console.log(`Showing ASL for: ${activeSegment.glossy_text}`);
+                }
+            } else {
+                // No active segment, hide the GIF
+                gif.style.display = "none";
+                textDiv.textContent = "";
+                emotionDiv.textContent = "";
+                gif.dataset.currentSegment = "";
+            }
+        }
+        
+        // Set up event listeners
+        video.addEventListener("timeupdate", syncGifToTime);
+        video.addEventListener("seeking", syncGifToTime);
+        video.addEventListener("play", syncGifToTime);
+        
+        // Initial sync
+        syncGifToTime();
+        
+        console.log("ASL synchronization setup complete");
+    }
+    
+    // Start trying to set up sync immediately
+    setupSync();
+    
+    // Also set up a backup timer in case the video loads later
+    const maxRetries = 20;
+    let retryCount = 0;
+    const retryInterval = setInterval(() => {
+        const video = findVideoElement();
+        retryCount++;
+        
+        if (video || retryCount >= maxRetries) {
+            clearInterval(retryInterval);
+            if (video) setupSync();
+            else console.error("Failed to find video element after multiple retries");
+        }
+    }, 1000);
     </script>
     """
     return html
-
-# def generate_asl_display_html(segments):
-#     # Gradio needs full `/file=...` paths if returning temp files
-#     for seg in segments:
-#         if not seg["gif_path"].startswith("/file="):
-#             seg["gif_path"] = f"/file={os.path.basename(seg['gif_path'])}"
-
-#     html = f"""
-#     <div id="asl-container" style="text-align:center; margin-top:10px;">
-#         <img id="asl-gif" src="" width="256" height="256" style="display:none;" />
-#     </div>
-#     <script>
-#     const segments = {json.dumps(segments)};
-#     const gif = document.getElementById("asl-gif");
-
-#     function getVideoEl() {{
-#         return document.querySelector("video");
-#     }}
-
-#     function syncGifToVideo(video) {{
-#         video.addEventListener("timeupdate", () => {{
-#             const time = video.currentTime;
-#             const active = segments.find(s => time >= s.start_time && time <= s.end_time);
-#             if (active) {{
-#                 const gifURL = active.gif_path;
-#                 if (!gif.src.endsWith(gifURL)) {{
-#                     gif.src = gifURL;
-#                     gif.style.display = "inline";
-#                 }}
-#             }} else {{
-#                 gif.style.display = "none";
-#             }}
-#         }});
-#     }}
-
-#     // Wait until video exists before syncing
-#     const waitForVideo = setInterval(() => {{
-#         const video = getVideoEl();
-#         if (video) {{
-#             clearInterval(waitForVideo);
-#             syncGifToVideo(video);
-#         }}
-#     }}, 500);
-#     </script>
-#     """
-#     return html
-
-
