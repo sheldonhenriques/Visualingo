@@ -2,9 +2,11 @@ import os
 import json
 from openai import OpenAI
 from dotenv import load_dotenv
-from pose import generate_gif
+from pose import generate_mp4
 from video import describe_video_by_frames, get_transcript
 import concurrent.futures
+from pose import generate_mp4
+
 
 load_dotenv()
 
@@ -114,7 +116,7 @@ def summarize_segments(video_path):
 
 def process_segment_for_gif(segment):
     glossy_text = segment["glossy_text"]
-    gif_path = generate_gif(glossy_text)
+    gif_path = generate_mp4(glossy_text)
     gradio_url = f"/file={os.path.basename(gif_path)}"
     return {
         "start_time": segment["start_time"],
