@@ -8,9 +8,32 @@ from pose_format import Pose
 from pose_format.pose_visualizer import PoseVisualizer
 import numpy as np
 import ffmpeg
+import subprocess
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {DEVICE}")
+
+# --- Start of NVENC availability check ---
+def is_nvenc_available():
+    """Checks if h264_nvenc is available in ffmpeg."""
+    try:
+        process = subprocess.run(
+            ['ffmpeg', '-hide_banner', '-encoders'],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return 'h264_nvenc' in process.stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # ffmpeg not found or returned an error
+        return False
+
+NVENC_AVAILABLE = is_nvenc_available()
+if NVENC_AVAILABLE:
+    print("NVENC is available. Will use h264_nvenc for encoding.")
+else:
+    print("NVENC not available. Will use libx264 for encoding.")
+# --- End of NVENC availability check ---
 
 def fetch_pose_from_api(text):
     url = "https://us-central1-sign-mt.cloudfunctions.net/spoken_text_to_signed_pose"
@@ -49,13 +72,22 @@ def frames_to_mp4(frames, fps=12, output_path=None):
     height, width, _ = frames[0].shape
     output_path = output_path or os.path.join(tempfile.gettempdir(), f"{uuid.uuid4().hex}.mp4")
 
-    process = (
-        ffmpeg
-        .input('pipe:', format='rawvideo', pix_fmt='rgb24', s=f'{width}x{height}', framerate=fps)
-        .output(output_path, vcodec='libx264', pix_fmt='yuv420p', preset='ultrafast')
-        .overwrite_output()
-        .run_async(pipe_stdin=True)
-    )
+    if NVENC_AVAILABLE:
+        process = (
+            ffmpeg
+            .input('pipe:', format='rawvideo', pix_fmt='rgb24', s=f'{width}x{height}', framerate=fps)
+            .output(output_path, vcodec='h264_nvenc', pix_fmt='yuv420p', preset='fast')
+            .overwrite_output()
+            .run_async(pipe_stdin=True)
+        )
+    else:
+        process = (
+            ffmpeg
+            .input('pipe:', format='rawvideo', pix_fmt='rgb24', s=f'{width}x{height}', framerate=fps)
+            .output(output_path, vcodec='libx264', pix_fmt='yuv420p', preset='ultrafast')
+            .overwrite_output()
+            .run_async(pipe_stdin=True)
+        )
 
     for frame in frames:
         process.stdin.write(frame.astype(np.uint8).tobytes())
